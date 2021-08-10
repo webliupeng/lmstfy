@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -87,27 +88,36 @@ func (c *LmstfyClient) ConfigRetry(retryCount int, backOffMillisecond int) {
 	c.backOff = backOffMillisecond
 }
 
-func (c *LmstfyClient) getReq(method, relativePath string, query url.Values, body []byte) (req *http.Request, err error) {
+func (c *LmstfyClient) getReqCtx(ctx context.Context, method, relativePath string, query url.Values, body []byte) (req *http.Request, err error) {
 	targetUrl := url.URL{
 		Scheme:   c.scheme,
 		Host:     fmt.Sprintf("%s:%d", c.Host, c.Port),
 		Path:     path.Join("/api", c.Namespace, relativePath),
 		RawQuery: query.Encode(),
 	}
-	if body == nil {
-		req, err = http.NewRequest(method, targetUrl.String(), nil)
-		if err != nil {
-			return
-		}
-		req.Header.Add("X-Token", c.Token)
-		return
+
+	reqBody := bytes.NewReader(nil)
+
+	if body != nil {
+		reqBody = bytes.NewReader(body)
 	}
-	req, err = http.NewRequest(method, targetUrl.String(), bytes.NewReader(body))
+
+	req, err = http.NewRequestWithContext(ctx, method, targetUrl.String(), reqBody)
 	if err != nil {
 		return
 	}
 	req.Header.Add("X-Token", c.Token)
+
+	requestId := ctx.Value("request-id")
+
+	if val, ok := requestId.([]string); ok {
+		req.Header.Add("X-Request-Id", val[0])
+	}
 	return
+}
+
+func (c *LmstfyClient) getReq(method, relativePath string, query url.Values, body []byte) (req *http.Request, err error) {
+	return c.getReqCtx(context.TODO(), method, relativePath, query, body)
 }
 
 // Publish a new job to the queue.
@@ -115,7 +125,15 @@ func (c *LmstfyClient) getReq(method, relativePath string, query url.Values, bod
 //   - tries is the maximum times the job can be fetched.
 //   - delaySecond is the duration before the job is released for consuming. When it's zero, no delay is applied.
 func (c *LmstfyClient) Publish(queue string, data []byte, ttlSecond uint32, tries uint16, delaySecond uint32) (jobID string, e error) {
-	return c.publish(queue, "", data, ttlSecond, tries, delaySecond)
+	return c.publish(context.TODO(), queue, "", data, ttlSecond, tries, delaySecond)
+}
+
+// Publish a new job to the queue with a context.
+//   - ttlSecond is the time-to-live of the job. If it's zero, job won't expire; if it's positive, the value is the TTL.
+//   - tries is the maximum times the job can be fetched.
+//   - delaySecond is the duration before the job is released for consuming. When it's zero, no delay is applied.
+func (c *LmstfyClient) PublishCtx(ctx context.Context, queue string, data []byte, ttlSecond uint32, tries uint16, delaySecond uint32) (jobID string, e error) {
+	return c.publish(ctx, queue, "", data, ttlSecond, tries, delaySecond)
 }
 
 // RePublish delete(ack) the job of the queue and publish the job again.
@@ -123,10 +141,10 @@ func (c *LmstfyClient) Publish(queue string, data []byte, ttlSecond uint32, trie
 //   - tries is the maximum times the job can be fetched.
 //   - delaySecond is the duration before the job is released for consuming. When it's zero, no delay is applied.
 func (c *LmstfyClient) RePublish(job *Job, ttlSecond uint32, tries uint16, delaySecond uint32) (jobID string, e error) {
-	return c.publish(job.Queue, job.ID, job.Data, ttlSecond, tries, delaySecond)
+	return c.publish(context.TODO(), job.Queue, job.ID, job.Data, ttlSecond, tries, delaySecond)
 }
 
-func (c *LmstfyClient) publish(queue, ackJobID string, data []byte, ttlSecond uint32, tries uint16, delaySecond uint32) (jobID string, e error) {
+func (c *LmstfyClient) publish(ctx context.Context, queue, ackJobID string, data []byte, ttlSecond uint32, tries uint16, delaySecond uint32) (jobID string, e error) {
 	query := url.Values{}
 	query.Add("ttl", strconv.FormatUint(uint64(ttlSecond), 10))
 	query.Add("tries", strconv.FormatUint(uint64(tries), 10))
@@ -137,7 +155,7 @@ func (c *LmstfyClient) publish(queue, ackJobID string, data []byte, ttlSecond ui
 		relativePath = path.Join(relativePath, "job", ackJobID)
 	}
 RETRY:
-	req, err := c.getReq(http.MethodPut, relativePath, query, data)
+	req, err := c.getReqCtx(ctx, http.MethodPut, relativePath, query, data)
 	if err != nil {
 		return "", &APIError{
 			Type:   RequestErr,
@@ -582,8 +600,15 @@ func (c *LmstfyClient) consumeFromQueues(ttrSecond, timeoutSecond uint32, freeze
 	return job, nil
 }
 
-// Mark a job as finished, so it won't be retried by others.
 func (c *LmstfyClient) Ack(queue, jobID string) *APIError {
+	return c.AckCtx(context.TODO(), queue, jobID)
+}
+
+// Mark a job as finished, so it won't be retried by others.
+func (c *LmstfyClient) AckCtx(ctx context.Context, queue, jobID string) *APIError {
+	reqId := ctx.Value("Request_ID")
+	fmt.Println("req id", reqId)
+
 	req, err := c.getReq(http.MethodDelete, path.Join(queue, "job", jobID), nil, nil)
 	if err != nil {
 		return &APIError{

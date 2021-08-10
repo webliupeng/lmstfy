@@ -108,10 +108,13 @@ func (c *LmstfyClient) getReqCtx(ctx context.Context, method, relativePath strin
 	}
 	req.Header.Add("X-Token", c.Token)
 
-	requestId := ctx.Value("request-id")
+	headers := ctx.Value("trace-headers")
+	fmt.Printf("forward to lmstfy%+v\n", headers)
 
-	if val, ok := requestId.([]string); ok {
-		req.Header.Add("X-Request-Id", val[0])
+	if val, ok := headers.(map[string]string); ok {
+		for h, v := range val {
+			req.Header.Add(h, v)
+		}
 	}
 	return
 }

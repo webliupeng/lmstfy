@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	opentracing "github.com/opentracing/opentracing-go"
 )
 
 type Job struct {
@@ -108,14 +110,24 @@ func (c *LmstfyClient) getReqCtx(ctx context.Context, method, relativePath strin
 	}
 	req.Header.Add("X-Token", c.Token)
 
-	headers := ctx.Value("trace-headers")
-	fmt.Printf("forward to lmstfy%+v\n", headers)
+	//headers := ctx.Value("trace-headers")
 
-	if val, ok := headers.(map[string]string); ok {
-		for h, v := range val {
-			req.Header.Add(h, v)
-		}
+	span := opentracing.SpanFromContext(ctx)
+
+	if span != nil {
+		opentracing.GlobalTracer().Inject(
+			span.Context(),
+			opentracing.HTTPHeaders,
+			opentracing.HTTPHeadersCarrier(req.Header))
+
+		// if val, ok := headers.(map[string]string); ok {
+		// 	for h, v := range val {
+		// 		req.Header.Add(h, v)
+		// 	}
+		// }
+		fmt.Printf("forward to lmstfy%+v\n", req.Header)
 	}
+
 	return
 }
 

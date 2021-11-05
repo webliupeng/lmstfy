@@ -622,7 +622,6 @@ func (c *LmstfyClient) Ack(queue, jobID string) *APIError {
 // Mark a job as finished, so it won't be retried by others.
 func (c *LmstfyClient) AckCtx(ctx context.Context, queue, jobID string) *APIError {
 	reqId := ctx.Value("Request_ID")
-	fmt.Println("req id", reqId)
 
 	req, err := c.getReq(http.MethodDelete, path.Join(queue, "job", jobID), nil, nil)
 	if err != nil {
